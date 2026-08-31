@@ -1,0 +1,5 @@
+node_modules/
+dist/
+.archive-inspect/
+.env
+.env.local
