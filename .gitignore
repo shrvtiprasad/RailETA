@@ -1,5 +1,28 @@
+# Environment
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Generated database
+backend/data/*.db
+backend/data/*.sqlite
+backend/data/*.sqlite3
+
+# Raw downloaded data
+backend/data/raw/
+
+# Generated validation/output
+backend/data/validation_report.json
+
+# Freebuff
+.freebuff/
+
+# Frontend
 node_modules/
 dist/
-.archive-inspect/
-.env
-.env.local
