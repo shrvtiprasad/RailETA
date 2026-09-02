@@ -1,11 +1,13 @@
 import os
+import ssl
 from pathlib import Path
 
 import httpx
+import truststore
 from dotenv import load_dotenv
 from fastapi import APIRouter, HTTPException
 
-import certifi
+
 # backend/.env
 BASE_DIR = Path(__file__).resolve().parents[2]
 ENV_PATH = BASE_DIR / ".env"
@@ -17,6 +19,7 @@ RAILRADAR_API_KEY = os.getenv("RAILRADAR_API_KEY")
 router = APIRouter(prefix="/trains", tags=["Live Trains"])
 
 RAILRADAR_BASE_URL = "https://api.railradar.in/v1"
+SSL_CONTEXT = truststore.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
 
 
 @router.get("/{train_number}/live")
@@ -37,7 +40,7 @@ async def get_live_train(train_number: str):
     try:
         async with httpx.AsyncClient(
         timeout=15.0,
-        verify=certifi.where(),
+        verify=SSL_CONTEXT,
         ) as client:
            params = {
                 "authoritative": "true",

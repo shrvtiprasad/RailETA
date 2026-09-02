@@ -25,4 +25,4 @@ backend/data/validation_report.json
 
 # Frontend
 node_modules/
-dist/
+dist/backend/data/raw/railkit/
