@@ -1314,6 +1314,7 @@ button {
     padding: 14px;
   }
 
+<<<<<<< HEAD
   .feature-card {
     min-height: 140px;
     padding: 16px;
@@ -1324,3 +1325,102 @@ button {
     padding: 6px 10px;
   }
 }
+
+/* ===================== DEVELOPER API ===================== */
+
+.developer-api-panel { margin-bottom: 18px; }
+.developer-api-panel h2 { margin: 0 0 8px; color: #26333a; }
+.api-panel-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  margin-bottom: 18px;
+}
+.api-panel-heading .section-kicker { margin-bottom: 8px; }
+.api-panel-heading .muted { margin: 0; }
+.api-key-list { display: grid; gap: 0; }
+.api-key-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(220px, 1.2fr) auto;
+  align-items: center;
+  gap: 18px;
+  padding: 16px 0;
+  border-top: 1px solid #d1c6b8;
+  color: #526066;
+}
+.api-key-row strong,
+.api-key-row span { display: block; }
+.api-key-row strong { color: #26333a; margin-bottom: 5px; }
+.api-key-mask,
+.api-key-plaintext,
+.api-code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.api-key-mask { font-size: 13px; overflow-wrap: anywhere; }
+.api-key-meta { display: flex; flex-wrap: wrap; gap: 6px 14px; font-size: 12px; }
+.api-key-meta b { color: #4c7090; text-transform: uppercase; }
+.api-empty-state { padding: 28px 12px; }
+.api-empty-state button { margin-top: 10px; }
+.developer-api-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+.api-code-label { color: #526066; font-size: 14px; font-weight: 700; margin-top: 18px; }
+.api-code {
+  margin: 10px 0 0;
+  padding: 16px;
+  overflow-x: auto;
+  border-radius: 12px;
+  background: #e7e2d9;
+  color: #26333a;
+  font-size: 13px;
+  line-height: 1.6;
+}
+.api-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(38, 51, 58, .28);
+}
+.api-modal {
+  width: min(100%, 520px);
+  padding: 28px;
+  background: #fbfaf7;
+  border: 1px solid #d1c6b8;
+  border-radius: 20px;
+  color: #26333a;
+  box-shadow: 0 18px 44px rgba(38,51,58,.18);
+}
+.api-modal h2 { margin: 0 0 16px; }
+.api-modal label { display: block; margin-bottom: 8px; color: #526066; font-weight: 700; }
+.api-modal input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 12px 14px;
+  border: 1px solid #b7a29a;
+  border-radius: 9px;
+  background: #fff;
+  color: #26333a;
+  font: inherit;
+}
+.api-modal form > .muted { display: block; margin-top: 8px; font-size: 13px; }
+.api-modal-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 22px; }
+.api-key-plaintext {
+  display: block;
+  margin-top: 18px;
+  padding: 14px;
+  overflow-wrap: anywhere;
+  border: 1px solid #d1c6b8;
+  border-radius: 9px;
+  background: #f2eee8;
+  color: #26333a;
+  font-size: 13px;
+}
+
+@media (max-width: 760px) {
+  .api-panel-heading,
+  .developer-api-grid { grid-template-columns: 1fr; display: grid; }
+  .api-panel-heading button { width: 100%; }
+  .api-key-row { grid-template-columns: 1fr; gap: 10px; }
+  .api-key-row button { justify-self: start; }
+}
+>>>>>>> ebf27ed (Add API-first RailETA platform and Developer API key management)

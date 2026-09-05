@@ -1,0 +1,11 @@
+{
+  "name": "raileta-railkit-bridge",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "railkit": "^4.1.0"
+  }
+}

@@ -1,0 +1,3 @@
+train_number,journey_date
+# Copy this file to journeys.csv and keep only confirmed completed RailKit journeys.
+# Dates must use DD-MM-YYYY. Do not add guessed or unverified combinations.

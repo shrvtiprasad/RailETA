@@ -26,16 +26,43 @@ import { ArrowRight } from 'lucide-react'
 
 setWorkerUrl(workerUrl)
 
-const API_BASE = 'http://127.0.0.1:8000/api/v1'
+const API_BASE = (
+  import.meta.env.VITE_API_BASE_URL ||
+  'http://127.0.0.1:8000/api/v1'
+).replace(/\/+$/, '')
+
+const ACCOUNT_ID = import.meta.env.VITE_ACCOUNT_ID || 'local-development-account'
 
 const DEMO_EMAIL = 'authority@raileta.demo'
 const DEMO_PASSWORD = 'RailETA@123'
+
+function normalizeLiveStop(stop) {
+  if (!stop || typeof stop !== 'object') return stop
+  const coordinates = stop.coordinates
+  const coordinateArray = Array.isArray(coordinates) ? coordinates : null
+  return {
+    ...stop,
+    lat:
+      stop.lat ??
+      stop.latitude ??
+      coordinates?.lat ??
+      coordinates?.latitude ??
+      coordinateArray?.[1],
+    lng:
+      stop.lng ??
+      stop.longitude ??
+      coordinates?.lng ??
+      coordinates?.longitude ??
+      coordinateArray?.[0],
+  }
+}
 
 const passengerNav = [
   ['Overview', 'overview'],
   ['Stable ETA', 'stable-eta'],
   ['Delay Explanation', 'delay-explanation'],
   ['Connection Risk', 'connection-risk'],
+  ['Developer API', 'developer-api'],
 ]
 
 const authorityNav = [
@@ -43,6 +70,7 @@ const authorityNav = [
   ['Delay Propagation', 'delay-propagation'],
   ['Delay & Recovery', 'delay-recovery'],
   ['Stable ETA', 'stable-eta'],
+  ['Developer API', 'developer-api'],
 ]
 
 export function EmptyState({
@@ -124,6 +152,48 @@ function delayMinutes(scheduled, actual) {
   }
 }
 
+function etaStation(eta) {
+  return eta?.next_station || eta?.stations?.[0] || null
+}
+
+function formatMinutes(value) {
+  return value == null || !Number.isFinite(Number(value))
+    ? '—'
+    : `${Math.round(Number(value))} min`
+}
+
+function formatSignedMinutes(value) {
+  if (value == null || !Number.isFinite(Number(value))) return '—'
+  const rounded = Math.round(Number(value))
+  if (rounded === 0) return 'No change'
+  return `${rounded > 0 ? '+' : ''}${rounded} min`
+}
+
+function recoverySummary(eta) {
+  const station = etaStation(eta)
+  const current = Number(eta?.current_delay_minutes)
+  const predicted = Number(station?.predicted_delay_minutes)
+  if (!Number.isFinite(current) || !Number.isFinite(predicted)) return '—'
+  const change = Math.round(predicted - current)
+  if (change === 0) return 'No predicted change'
+  return change < 0
+    ? `${Math.abs(change)} min recovery predicted`
+    : `${change} min additional delay predicted`
+}
+
+function contributingFactors(eta) {
+  const station = etaStation(eta)
+  const current = Number(eta?.current_delay_minutes)
+  const predicted = Number(station?.predicted_delay_minutes)
+  if (!Number.isFinite(current) || !Number.isFinite(predicted)) return '—'
+  const factors = []
+  if (current > 0) factors.push('current carried RailRadar delay')
+  if (predicted > current) factors.push('remaining section characteristics')
+  if (predicted < current) factors.push('predicted recovery across remaining sections')
+  if (station?.weather_context) factors.push('weather considered by the model')
+  return factors.length > 0 ? factors.join(', ') : 'available live and scheduled route features'
+}
+
 function scrollToSection(id) {
   document.getElementById(id)?.scrollIntoView({
     behavior: 'smooth',
@@ -136,6 +206,8 @@ function Header({
   active = 'overview',
 }) {
   const nav = authority ? authorityNav : passengerNav
+  const location = useLocation()
+  const query = authority ? location.search : ''
 
   const base = authority
     ? '/authority-dashboard'
@@ -143,7 +215,7 @@ function Header({
 
   return (
     <header className="dashboard-header passenger-nav">
-      <Link className="brand" to={base}>
+      <Link className="brand" to={`${base}${query}`}>
         <span className="brand-mark">
           <img src="/logo.png" alt="RailETA" />
         </span>
@@ -157,10 +229,18 @@ function Header({
             <NavLink
               key={label}
               end={!id}
-              to={`${base}${id ? `/${id}` : ''}`}
+              to={`${base}${id ? `/${id}` : ''}${query}`}
               className={({ isActive }) =>
                 isActive ? 'active' : ''
               }
+            >
+              {label}
+            </NavLink>
+          ) : id === 'developer-api' ? (
+            <NavLink
+              key={label}
+              to={`${base}/developer-api`}
+              className={({ isActive }) => (isActive ? 'active' : '')}
             >
               {label}
             </NavLink>
@@ -360,11 +440,11 @@ function RailwayMap({ trainNumber, onLiveUpdate }) {
     /*
      * ROUTE STATIONS
      */
-    const routeStops = Array.isArray(
+    const routeStops = (Array.isArray(
       liveData.route
     )
       ? liveData.route
-      : liveData.route?.stops || []
+      : liveData.route?.stops || []).map(normalizeLiveStop)
 
     const validStops = routeStops
       .filter(
@@ -515,6 +595,48 @@ function RailwayMap({ trainNumber, onLiveUpdate }) {
             true
         }
       }
+    }
+
+    const location = liveData.currentLocation || {}
+    const normalizedLocation = normalizeLiveStop(location)
+    let trainCoordinates = [
+      Number(normalizedLocation.lng),
+      Number(normalizedLocation.lat),
+    ]
+    if (!trainCoordinates.every(Number.isFinite)) {
+      const currentIndex = validStops.findIndex(
+        (stop) =>
+          stop.stationCode === location.stationCode ||
+          Number(stop.sequence) === Number(location.sequence)
+      )
+      const start = validStops[currentIndex >= 0 ? currentIndex : 0]
+      const end = validStops[currentIndex >= 0 ? currentIndex + 1 : 1]
+      const progress = Math.min(
+        1,
+        Math.max(0, Number(location.segmentProgress ?? 0))
+      )
+      if (start && end) {
+        const startPoint = [Number(start.lng), Number(start.lat)]
+        const endPoint = [Number(end.lng), Number(end.lat)]
+        if ([...startPoint, ...endPoint].every(Number.isFinite)) {
+          trainCoordinates = startPoint.map(
+            (value, index) => value + (endPoint[index] - value) * progress
+          )
+        }
+      }
+    }
+    if (trainCoordinates.every(Number.isFinite)) {
+      const trainElement = document.createElement('div')
+      trainElement.style.width = '18px'
+      trainElement.style.height = '18px'
+      trainElement.style.borderRadius = '50%'
+      trainElement.style.background = '#dc5032'
+      trainElement.style.border = '3px solid #fff'
+      trainElement.style.boxShadow = '0 0 0 4px rgba(220,80,50,0.25), 0 2px 10px rgba(38,51,58,0.35)'
+      markerRef.current = new Marker({ element: trainElement })
+        .setLngLat(trainCoordinates)
+        .setPopup(new Popup({ offset: 12 }).setText(`Train ${liveData.trainNumber || trainNumber}`))
+        .addTo(map)
     }
 
     /*
@@ -807,13 +929,13 @@ function RailwayMap({ trainNumber, onLiveUpdate }) {
    FIELD LIST
    ========================================================= */
 
-function FieldList({ fields }) {
+function FieldList({ fields, values = {} }) {
   return (
     <div className="eta-list">
       {fields.map((label) => (
         <div className="eta-row" key={label}>
           <span>{label}</span>
-          <b>—</b>
+          <b>{values[label] ?? '—'}</b>
         </div>
       ))}
     </div>
@@ -824,7 +946,7 @@ function FieldList({ fields }) {
    STATION / TRAIN INFORMATION
    ========================================================= */
 
-function StationEtaPanel({ train }) {
+function StationEtaPanel({ train, eta }) {
   if (!train) {
     return (
       <section className="eta-panel">
@@ -854,6 +976,33 @@ function StationEtaPanel({ train }) {
       </div>
 
       <h2>{train.train_name}</h2>
+
+      {etaStation(eta) && (
+        <div className="eta-list">
+          <div className="eta-row">
+            <span>Upcoming station</span>
+            <b>
+              {etaStation(eta).station_name || etaStation(eta).station_code || '—'}
+            </b>
+          </div>
+          <div className="eta-row">
+            <span>Predicted arrival</span>
+            <b>{formatIST(etaStation(eta).predicted_arrival)}</b>
+          </div>
+          <div className="eta-row">
+            <span>Predicted delay</span>
+            <b>
+              {etaStation(eta).predicted_delay_minutes == null
+                ? '—'
+                : `${Math.round(etaStation(eta).predicted_delay_minutes)} min`}
+            </b>
+          </div>
+          <div className="eta-row">
+            <span>Reliability</span>
+            <b>{etaStation(eta).confidence || '—'}</b>
+          </div>
+        </div>
+      )}
 
       <div className="eta-list">
         <div className="eta-row">
@@ -940,7 +1089,24 @@ function FeatureCard({
    PASSENGER FEATURE SECTIONS
    ========================================================= */
 
-function FeatureSections() {
+function FeatureSections({
+  eta,
+  liveInfo,
+  connectionRisk,
+  connectingTrainNumber,
+  onConnectingTrainNumberChange,
+  onCheckConnection,
+  connectionLoading,
+  connectionError,
+}) {
+  const station = etaStation(eta)
+  const stable = eta?.stable_eta || {}
+  const predictedArrival = formatIST(station?.predicted_arrival)
+  const currentDelay = formatMinutes(eta?.current_delay_minutes)
+  const reliability = eta?.confidence || station?.confidence
+  const currentStatus =
+    eta?.current_position?.state || liveInfo?.status || '—'
+
   return (
     <>
       <section
@@ -968,6 +1134,18 @@ function FeatureSections() {
               'Stability',
               'Reliability',
             ]}
+            values={{
+              'Current ETA': formatIST(stable.current_eta) === '—'
+                ? predictedArrival
+                : formatIST(stable.current_eta),
+              'ETA Range': stable.eta_range
+                ? `${formatIST(stable.eta_range.lower)} – ${formatIST(stable.eta_range.upper)}`
+                : '—',
+              'Previous ETA': formatIST(stable.previous_eta),
+              Change: formatSignedMinutes(stable.change_minutes),
+              Stability: stable.stability || '—',
+              Reliability: stable.reliability || reliability,
+            }}
           />
         </div>
       </section>
@@ -995,16 +1173,23 @@ function FeatureSections() {
               'Expected Recovery',
               'Current Status',
             ]}
+            values={{
+              'Current Delay': currentDelay,
+              'Why is my train delayed?': contributingFactors(eta),
+              'Expected Recovery': recoverySummary(eta),
+              'Current Status': currentStatus,
+            }}
           />
 
           <div className="plain-language">
             <strong>
-              Waiting for prediction
+              {eta ? 'Live prediction context' : 'Waiting for prediction'}
             </strong>
 
             <span>
-              Simple delay context will appear when
-              backend data is available.
+              {eta
+                ? `The current delay is ${currentDelay}; the returned station predictions are from the ${eta.prediction_source || 'available'} path. Weather is shown as context, not as proof of causation.`
+                : 'Simple delay context will appear when backend data is available.'}
             </span>
           </div>
         </div>
@@ -1026,6 +1211,21 @@ function FeatureSections() {
         </p>
 
         <div className="feature-panel">
+          <form
+            className="authority-search-bar"
+            onSubmit={onCheckConnection}
+          >
+            <input
+              aria-label="Connecting train number"
+              value={connectingTrainNumber}
+              onChange={(event) => onConnectingTrainNumberChange(event.target.value)}
+              placeholder="Optional: enter your connecting train number"
+            />
+            <button type="submit" disabled={connectionLoading}>
+              {connectionLoading ? 'Checking...' : 'Check connection →'}
+            </button>
+          </form>
+
           <FieldList
             fields={[
               'Connecting Journey',
@@ -1034,7 +1234,25 @@ function FeatureSections() {
               'Risk',
               'Recommendation',
             ]}
+            values={{
+              'Connecting Journey': connectionRisk?.connecting_train_name
+                ? `${connectionRisk.connecting_train_number} — ${connectionRisk.connecting_train_name}`
+                : connectionRisk?.status === 'unavailable'
+                ? 'No connecting journey detected'
+                : 'No connecting journey detected',
+              'Predicted Arrival': formatIST(connectionRisk?.predicted_arrival),
+              'Connection Time': formatMinutes(connectionRisk?.connection_time_minutes),
+              Risk: connectionRisk?.risk || '—',
+              Recommendation: connectionRisk?.recommendation || connectionRisk?.reason || 'No connecting journey detected',
+            }}
           />
+
+          {(connectionError || connectionRisk?.status === 'unavailable') && (
+            <div className="plain-language">
+              <strong>{connectionError ? 'Connection check unavailable' : 'Connection data unavailable'}</strong>
+              <span>{connectionError || connectionRisk.reason}</span>
+            </div>
+          )}
         </div>
       </section>
     </>
@@ -1045,7 +1263,7 @@ function FeatureSections() {
    SCHEDULE STOP ROW
    ========================================================= */
 
-function ScheduleStopRow({ stop, isNextStation }) {
+function ScheduleStopRow({ stop, isNextStation, prediction }) {
   const {
     station_code,
     station_name,
@@ -1067,12 +1285,17 @@ function ScheduleStopRow({ stop, isNextStation }) {
     status === 'arriving' ||
     status === 'approaching'
 
+  const predictedDelay = Number(prediction?.predicted_delay_minutes)
+  const hasPredictedArr =
+    !actual_arrival && !!prediction?.predicted_arrival
   const depDelay =
     delay_departure ??
     delayMinutes(departure_time, actual_departure)
   const arrDelay =
-    delay_arrival ??
-    delayMinutes(arrival_time, actual_arrival)
+    hasPredictedArr && Number.isFinite(predictedDelay)
+      ? predictedDelay
+      : delay_arrival ??
+        delayMinutes(arrival_time, actual_arrival)
 
   const hasActualArr = !!actual_arrival
   const hasActualDep = !!actual_departure
@@ -1088,6 +1311,10 @@ function ScheduleStopRow({ stop, isNextStation }) {
   let arrIsEarly = false
   if (hasActualArr) {
     displayArr = formatTimeIST(actual_arrival)
+    arrIsDelayed = (arrDelay ?? 0) > 0
+    arrIsEarly = (arrDelay ?? 0) < 0
+  } else if (hasPredictedArr) {
+    displayArr = formatTimeIST(prediction.predicted_arrival)
     arrIsDelayed = (arrDelay ?? 0) > 0
     arrIsEarly = (arrDelay ?? 0) < 0
   } else if (arrival_time) {
@@ -1206,16 +1433,16 @@ function ScheduleStopRow({ stop, isNextStation }) {
         {displayArr && (
           <span style={{fontSize:'12px', lineHeight:'1.4'}}>
             <span style={{color:'#8a9399', fontSize:'10px'}}>Arr </span>
-            {!hasActualArr && (
+            {!hasActualArr && !hasPredictedArr && (
               <span style={{color:'#526066'}}>
                 {scheduledArr}
               </span>
             )}
-            {hasActualArr && (
+            {(hasActualArr || hasPredictedArr) && (
               <>
                 <span style={{
                   color:'#8a9399',
-                  textDecoration: arrIsDelayed || arrIsEarly ? 'line-through' : 'none',
+                  textDecoration: arrIsDelayed || arrIsEarly || hasPredictedArr ? 'line-through' : 'none',
                   fontSize: '11px',
                 }}>
                   {scheduledArr}
@@ -1226,6 +1453,8 @@ function ScheduleStopRow({ stop, isNextStation }) {
                     ? '#dc5032'
                     : arrIsEarly
                     ? '#2d8a4e'
+                    : hasPredictedArr
+                    ? '#4c7090'
                     : '#2d8a4e',
                   fontWeight: 700,
                 }}>
@@ -1253,13 +1482,13 @@ function ScheduleStopRow({ stop, isNextStation }) {
                 {arrDelay}m
               </span>
             )}
-            {!arrIsDelayed && !arrIsEarly && hasActualArr && (
+            {!arrIsDelayed && !arrIsEarly && (hasActualArr || hasPredictedArr) && (
               <span style={{
-                color:'#2d8a4e',
+                color: hasPredictedArr ? '#4c7090' : '#2d8a4e',
                 fontSize:'11px',
                 marginLeft:'4px',
               }}>
-                ✓
+                {hasPredictedArr ? 'predicted' : '✓'}
               </span>
             )}
           </span>
@@ -1343,6 +1572,12 @@ function PassengerDashboard() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [liveInfo, setLiveInfo] = useState(null)
+  const [eta, setEta] = useState(null)
+  const [etaError, setEtaError] = useState('')
+  const [connectingTrainNumber, setConnectingTrainNumber] = useState('')
+  const [connectionRisk, setConnectionRisk] = useState(null)
+  const [connectionLoading, setConnectionLoading] = useState(false)
+  const [connectionError, setConnectionError] = useState('')
 
   const location = useLocation()
 
@@ -1565,6 +1800,84 @@ function PassengerDashboard() {
     loadTrain()
   }, [trainNumber])
 
+  async function checkConnection(event) {
+    event.preventDefault()
+    const connecting = connectingTrainNumber.trim()
+    const station = etaStation(eta)?.station_code
+    if (!station) {
+      setConnectionRisk(null)
+      setConnectionError('The current ETA has no upcoming station for this connection check.')
+      return
+    }
+    setConnectionLoading(true)
+    setConnectionError('')
+    try {
+      const search = new URLSearchParams({
+        current_train_number: trainNumber,
+        connection_station: station,
+      })
+      if (connecting) search.set('connecting_train_number', connecting)
+      const response = await fetch(`${API_BASE}/connections/risk?${search.toString()}`)
+      const body = await response.json().catch(() => ({}))
+      if (!response.ok) {
+        throw new Error(body.detail || `Connection request failed (${response.status})`)
+      }
+      setConnectionRisk(body)
+      if (body.status === 'unavailable') setConnectionError(body.reason || 'Connection data is unavailable.')
+    } catch (err) {
+      setConnectionRisk(null)
+      setConnectionError(err.message || 'Could not load connection risk.')
+    } finally {
+      setConnectionLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    if (!trainNumber) {
+      setEta(null)
+      setEtaError('')
+      return
+    }
+    let cancelled = false
+    async function loadEta() {
+      try {
+        const response = await fetch(
+          `${API_BASE}/trains/${encodeURIComponent(trainNumber)}/eta`
+        )
+        if (!response.ok) {
+          let detail = ''
+          try {
+            const body = await response.json()
+            detail = body.detail || ''
+          } catch {
+            // Keep the status-based message when the backend has no JSON detail.
+          }
+          if (!cancelled) {
+            setEta(null)
+            setEtaError(detail || `ETA request failed (${response.status})`)
+          }
+          return
+        }
+        const result = await response.json()
+        if (!cancelled) {
+          setEta(result)
+          setEtaError('')
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setEta(null)
+          setEtaError(err.message || 'Could not load live ETA.')
+        }
+      }
+    }
+    loadEta()
+    const interval = setInterval(loadEta, 30000)
+    return () => {
+      cancelled = true
+      clearInterval(interval)
+    }
+  }, [trainNumber])
+
 
 
   /*
@@ -1672,7 +1985,7 @@ function PassengerDashboard() {
             <span className="data-badge">
               {loading
                 ? 'Loading train data'
-                : error
+                : error || etaError
                 ? 'Backend error'
                 : 'Backend connected'}
             </span>
@@ -1702,6 +2015,7 @@ function PassengerDashboard() {
 
                 <StationEtaPanel
                   train={train}
+                  eta={eta}
                 />
               </div>              <section className="feature-panel passenger-train-details">
                 <div className="section-kicker">
@@ -1843,7 +2157,7 @@ function PassengerDashboard() {
               {stops.length > 0 && (
                 <section className="feature-panel passenger-train-details">
                   <div className="section-kicker">
-                    Scheduled route
+                    Predicted downstream route
                   </div>
 
                   <h2>
@@ -1859,12 +2173,16 @@ function PassengerDashboard() {
                         const isNextStation =
                           liveInfo?.nextStation ===
                             stop.station_code
+                        const prediction = eta?.stations?.find(
+                          (item) => item.station_code === stop.station_code
+                        )
 
                         return (
                           <ScheduleStopRow
                             key={`${stop.station_code}-${stop.sequence}`}
                             stop={stop}
                             isNextStation={isNextStation}
+                            prediction={prediction}
                           />
                         )
                       })}
@@ -1898,7 +2216,16 @@ function PassengerDashboard() {
           />
         </div>
 
-        <FeatureSections />
+        <FeatureSections
+          eta={eta}
+          liveInfo={liveInfo}
+          connectionRisk={connectionRisk}
+          connectingTrainNumber={connectingTrainNumber}
+          onConnectingTrainNumberChange={setConnectingTrainNumber}
+          onCheckConnection={checkConnection}
+          connectionLoading={connectionLoading}
+          connectionError={connectionError}
+        />
 
         <Link
           className="back-link dashboard-back"
@@ -2287,6 +2614,8 @@ function AuthorityDashboard() {
   const [train, setTrain] = useState(null)
   const [stops, setStops] = useState([])
   const [liveInfo, setLiveInfo] = useState(null)
+  const [eta, setEta] = useState(null)
+  const [etaError, setEtaError] = useState('')
 
   const [loading, setLoading] =
     useState(true)
@@ -2534,6 +2863,52 @@ function AuthorityDashboard() {
     loadTrain()
   }, [trainNumber])
 
+  useEffect(() => {
+    if (!trainNumber) {
+      setEta(null)
+      setEtaError('')
+      return
+    }
+    let cancelled = false
+    async function loadEta() {
+      try {
+        const response = await fetch(
+          `${API_BASE}/trains/${encodeURIComponent(trainNumber)}/eta`
+        )
+        if (!response.ok) {
+          let detail = ''
+          try {
+            const body = await response.json()
+            detail = body.detail || ''
+          } catch {
+            // Keep the status-based message when the backend has no JSON detail.
+          }
+          if (!cancelled) {
+            setEta(null)
+            setEtaError(detail || `ETA request failed (${response.status})`)
+          }
+          return
+        }
+        const result = await response.json()
+        if (!cancelled) {
+          setEta(result)
+          setEtaError('')
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setEta(null)
+          setEtaError(err.message || 'Could not load live ETA.')
+        }
+      }
+    }
+    loadEta()
+    const interval = setInterval(loadEta, 30000)
+    return () => {
+      cancelled = true
+      clearInterval(interval)
+    }
+  }, [trainNumber])
+
   async function searchAnotherTrain(e) {
     e.preventDefault()
 
@@ -2651,7 +3026,7 @@ function AuthorityDashboard() {
           <span className="data-badge">
             {loading
               ? 'Loading backend data'
-              : error
+              : error || etaError
               ? 'Backend error'
               : 'Backend connected'}
           </span>
@@ -2699,6 +3074,7 @@ function AuthorityDashboard() {
 
               <StationEtaPanel
                 train={train}
+                eta={eta}
               />
             </div>
 
@@ -2790,12 +3166,16 @@ function AuthorityDashboard() {
                       const isNextStation =
                         liveInfo?.nextStation ===
                           stop.station_code
+                      const prediction = eta?.stations?.find(
+                        (item) => item.station_code === stop.station_code
+                      )
 
                       return (
                         <ScheduleStopRow
                           key={`${stop.station_code}-${stop.sequence}`}
                           stop={stop}
                           isNextStation={isNextStation}
+                          prediction={prediction}
                         />
                       )
                     })}
@@ -2821,7 +3201,7 @@ function AuthorityDashboard() {
 function AuthorityPage({ type }) {
   const configs = {
     propagation: [
-      'Network-Aware Delay Propagation',
+              'Downstream Delay Propagation',
       'Prediction workspace for network delay movement.',
     ],
 
@@ -2837,6 +3217,141 @@ function AuthorityPage({ type }) {
   }
 
   const config = configs[type]
+  const location = useLocation()
+  const trainNumber = new URLSearchParams(location.search).get('train')
+  const [data, setData] = useState(null)
+  const [loading, setLoading] = useState(Boolean(trainNumber))
+  const [error, setError] = useState('')
+
+  const endpointByType = {
+    propagation: 'delay-propagation',
+    recovery: 'delay-recovery',
+    stable: 'stable-eta',
+  }
+
+  useEffect(() => {
+    if (!trainNumber) {
+      setLoading(false)
+      setData(null)
+      setError('')
+      return undefined
+    }
+
+    let cancelled = false
+    async function loadFeature() {
+      setLoading(true)
+      setError('')
+      try {
+        const response = await fetch(
+          `${API_BASE}/trains/${encodeURIComponent(trainNumber)}/${endpointByType[type]}`
+        )
+        const body = await response.json().catch(() => ({}))
+        if (!response.ok) {
+          throw new Error(body.detail || `Prediction request failed (${response.status})`)
+        }
+        if (!cancelled) setData(body)
+      } catch (err) {
+        if (!cancelled) {
+          setData(null)
+          setError(err.message || 'Could not load prediction data.')
+        }
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    }
+    loadFeature()
+    return () => {
+      cancelled = true
+    }
+  }, [trainNumber, type])
+
+  function renderFeatureData() {
+    if (type === 'stable') {
+      return (
+        <div className="feature-panel">
+          <FieldList
+            fields={['Current ETA', 'ETA Range', 'Previous ETA', 'Change', 'Stability', 'Reliability']}
+            values={{
+              'Current ETA': formatIST(data.current_eta),
+              'ETA Range': data.eta_range
+                ? `${formatIST(data.eta_range.lower)} – ${formatIST(data.eta_range.upper)}`
+                : '—',
+              'Previous ETA': formatIST(data.previous_eta),
+              Change: formatSignedMinutes(data.change_minutes),
+              Stability: data.stability || '—',
+              Reliability: data.reliability || '—',
+            }}
+          />
+          <div className="plain-language">
+            <strong>Prediction history</strong>
+            <span>{data.history_count_for_station || 0} stored snapshot(s) for this upcoming station. The ETA range uses the measured model test error and is not a probability guarantee.</span>
+          </div>
+        </div>
+      )
+    }
+
+    if (type === 'recovery') {
+      return (
+        <div className="feature-panel">
+          <FieldList
+            fields={['Current Delay', 'Predicted Final Delay', 'Predicted Additional Delay', 'Expected Recovery', 'Current Status', 'Confidence']}
+            values={{
+              'Current Delay': formatMinutes(data.current_delay_minutes),
+              'Predicted Final Delay': formatMinutes(data.predicted_final_delay_minutes),
+              'Predicted Additional Delay': formatMinutes(data.predicted_additional_delay_minutes),
+              'Expected Recovery': data.expected_recovery_minutes == null ? 'No recovery predicted' : formatMinutes(data.expected_recovery_minutes),
+              'Current Status': data.current_status || '—',
+              Confidence: data.confidence || data.data_quality || '—',
+            }}
+          />
+          <div className="plain-language">
+            <strong>Real-time explanation</strong>
+            <span>{data.explanation || 'No explanation was returned.'}</span>
+          </div>
+        </div>
+      )
+    }
+
+    return (
+      <>
+        <div className="feature-panel">
+          <FieldList
+            fields={['Current Delay', 'Upcoming Station', 'Maximum Predicted Delay', 'Affected Downstream Stations', 'Confidence']}
+            values={{
+              'Current Delay': formatMinutes(data.current_delay_minutes),
+              'Upcoming Station': data.upcoming_station?.station_name || data.upcoming_station?.station_code || '—',
+              'Maximum Predicted Delay': formatMinutes(data.downstream_impact?.maximum_predicted_delay_minutes),
+              'Affected Downstream Stations': data.downstream_impact?.affected_downstream_station_count ?? '—',
+              Confidence: data.confidence || data.data_quality || '—',
+            }}
+          />
+          <div className="plain-language">
+            <strong>Current train route only</strong>
+            <span>{data.downstream_impact?.description || 'Downstream impact is unavailable.'}</span>
+          </div>
+        </div>
+        <div className="feature-panel" style={{marginTop: '18px'}}>
+          <div className="section-kicker">Returned downstream sections</div>
+          <div className="eta-list">
+            {(data.affected_downstream_stations || []).map((station) => (
+              <div className="eta-row" key={`${station.station_code}-${station.scheduled_arrival}`}>
+                <span>{station.station_name || station.station_code || 'Station'}</span>
+                <b>
+                  {formatMinutes(station.predicted_delay_minutes)}
+                  {station.predicted_additional_delay_minutes != null
+                    ? ` (${formatSignedMinutes(station.predicted_additional_delay_minutes)} section change)`
+                    : ''}
+                </b>
+              </div>
+            ))}
+          </div>
+          {(!data.affected_downstream_stations || data.affected_downstream_stations.length === 0) && (
+            <EmptyState title="No downstream station predictions" detail="The live response did not include downstream sections." />
+          )}
+        </div>
+      </>
+    )
+  }
 
   return (
     <>
@@ -2845,7 +3360,7 @@ function AuthorityPage({ type }) {
       <main className="feature-page">
         <Link
           className="back-link"
-          to="/authority-dashboard"
+          to={`/authority-dashboard${location.search}`}
         >
           ← Back to Authority Dashboard
         </Link>
@@ -2860,11 +3375,262 @@ function AuthorityPage({ type }) {
           {config[1]}
         </p>
 
-        <EmptyState
-          title="No prediction data available"
-          detail="Prediction models will populate this workspace once the ML layer is connected."
-        />
+        {!trainNumber && (
+          <EmptyState
+            title="No train selected"
+            detail="Return to the authority dashboard and select a real train."
+          />
+        )}
+        {loading && (
+          <EmptyState
+            title="Loading prediction data"
+            detail={`Fetching the ${config[0].toLowerCase()} for train ${trainNumber}.`}
+          />
+        )}
+        {error && !loading && (
+          <EmptyState title="Prediction unavailable" detail={error} />
+        )}
+        {!loading && !error && data && renderFeatureData()}
       </main>
+    </>
+  )
+}
+
+/* =========================================================
+   DEVELOPER API
+   ========================================================= */
+
+function developerApiError(body, fallback) {
+  return body?.error?.message || body?.detail || fallback
+}
+
+async function developerApiRequest(path, options = {}) {
+  const response = await fetch(`${API_BASE}${path}`, {
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Account-ID': ACCOUNT_ID,
+      ...(options.headers || {}),
+    },
+  })
+  const body = await response.json().catch(() => ({}))
+  if (!response.ok) {
+    throw new Error(developerApiError(body, `API request failed (${response.status})`))
+  }
+  return body
+}
+
+function DeveloperApiPage({ authority = false }) {
+  const [keys, setKeys] = useState([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [notice, setNotice] = useState('')
+  const [showGenerate, setShowGenerate] = useState(false)
+  const [keyName, setKeyName] = useState('')
+  const [generatedKey, setGeneratedKey] = useState(null)
+  const [copyLabel, setCopyLabel] = useState('Copy')
+  const [revokeTarget, setRevokeTarget] = useState(null)
+  const [actionLoading, setActionLoading] = useState(false)
+
+  async function loadKeys() {
+    setLoading(true)
+    setError('')
+    try {
+      const body = await developerApiRequest('/api-keys')
+      setKeys(Array.isArray(body.keys) ? body.keys : [])
+    } catch (err) {
+      setError(err.message || 'Could not load API keys.')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    loadKeys()
+  }, [])
+
+  async function generateKey(event) {
+    event.preventDefault()
+    setActionLoading(true)
+    setError('')
+    setNotice('')
+    try {
+      const body = await developerApiRequest('/api-keys', {
+        method: 'POST',
+        body: JSON.stringify({ name: keyName.trim() }),
+      })
+      setGeneratedKey(body.key || null)
+      setCopyLabel('Copy')
+      setShowGenerate(false)
+      setKeyName('')
+      await loadKeys()
+    } catch (err) {
+      setError(err.message || 'Could not generate API key.')
+    } finally {
+      setActionLoading(false)
+    }
+  }
+
+  async function revokeKey() {
+    if (!revokeTarget) return
+    setActionLoading(true)
+    setError('')
+    try {
+      await developerApiRequest(`/api-keys/${encodeURIComponent(revokeTarget.id)}`, { method: 'DELETE' })
+      setRevokeTarget(null)
+      setNotice('API key revoked.')
+      await loadKeys()
+    } catch (err) {
+      setError(err.message || 'Could not revoke API key.')
+    } finally {
+      setActionLoading(false)
+    }
+  }
+
+  async function copyGeneratedKey() {
+    if (!generatedKey) return
+    try {
+      await navigator.clipboard.writeText(generatedKey)
+      setCopyLabel('Copied')
+    } catch {
+      setCopyLabel('Copy failed')
+    }
+  }
+
+  const docsUrl = API_BASE.replace(/\/api\/v1\/?$/, '') + '/docs'
+  const backPath = authority ? '/authority-dashboard' : '/passenger-dashboard'
+
+  return (
+    <>
+      <Header authority={authority} active="developer-api" />
+      <main className="feature-page developer-api-page">
+        <Link className="back-link" to={backPath}>
+          ← Back to {authority ? 'Authority Dashboard' : 'Passenger Dashboard'}
+        </Link>
+
+        <span className="section-kicker">Developer access</span>
+        <h1>Developer API</h1>
+        <p className="feature-lede">
+          Connect your applications to RailETA's real-time train and ETA services.
+        </p>
+
+        <section className="feature-panel developer-api-panel">
+          <div className="api-panel-heading">
+            <div>
+              <span className="section-kicker">Secure access</span>
+              <h2>API Keys</h2>
+              <p className="muted">Use an API key to authenticate requests to RailETA's API.</p>
+            </div>
+            <button type="button" onClick={() => { setShowGenerate(true); setError('') }}>
+              + Generate API Key
+            </button>
+          </div>
+
+          {notice && <div className="plain-language"><strong>{notice}</strong></div>}
+          {error && <div className="plain-language"><strong>API key action unavailable</strong><span>{error}</span></div>}
+
+          {loading ? (
+            <div className="empty-state"><span>Loading API keys</span></div>
+          ) : keys.length === 0 ? (
+            <div className="empty-state api-empty-state">
+              <strong>No API keys yet</strong>
+              <span>Generate an API key to start integrating RailETA with your application.</span>
+              <button type="button" onClick={() => { setShowGenerate(true); setError('') }}>Generate API Key</button>
+            </div>
+          ) : (
+            <div className="api-key-list">
+              {keys.map((item) => (
+                <div className="api-key-row" key={item.id}>
+                  <div>
+                    <strong>{item.name}</strong>
+                    <span className="api-key-mask">{item.masked_key}</span>
+                  </div>
+                  <div className="api-key-meta">
+                    <span>Created {item.created_at ? new Date(item.created_at).toLocaleDateString() : '—'}</span>
+                    <span>Last used {item.last_used_at ? new Date(item.last_used_at).toLocaleString() : 'Never'}</span>
+                    <b>{item.status}</b>
+                  </div>
+                  {item.status === 'active' && (
+                    <button type="button" onClick={() => setRevokeTarget(item)}>Revoke</button>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </section>
+
+        <section className="feature-panel developer-api-panel">
+          <span className="section-kicker">Integration</span>
+          <h2>How to use the API</h2>
+          <p className="muted">Include your API key when making requests to RailETA.</p>
+          <div className="api-code-label">Example request</div>
+          <pre className="api-code">{`GET /api/v1/trains/{train_number}/live\nX-API-Key: YOUR_API_KEY`}</pre>
+        </section>
+
+        <section className="developer-api-grid">
+          <div className="feature-panel developer-api-panel">
+            <span className="section-kicker">Reference</span>
+            <h2>API Documentation</h2>
+            <p className="muted">Explore RailETA's API endpoints, request parameters, responses, and authentication requirements.</p>
+            <button type="button" onClick={() => window.open(docsUrl, '_blank', 'noopener,noreferrer')}>
+              Open API Docs →
+            </button>
+          </div>
+          <div className="feature-panel developer-api-panel">
+            <span className="section-kicker">Access</span>
+            <h2>API Access</h2>
+            <p className="muted">Your API key provides authenticated access to RailETA services available to your account.</p>
+            <p className="muted">API requests are subject to the configured rate limit.</p>
+          </div>
+        </section>
+      </main>
+
+      {showGenerate && (
+        <div className="api-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setShowGenerate(false) }}>
+          <div className="api-modal" role="dialog" aria-modal="true" aria-labelledby="generate-api-key-title">
+            <span className="section-kicker">API Keys</span>
+            <h2 id="generate-api-key-title">Generate API Key</h2>
+            <form onSubmit={generateKey}>
+              <label htmlFor="api-key-name">Key name</label>
+              <input id="api-key-name" value={keyName} onChange={(event) => setKeyName(event.target.value)} placeholder="My Application" maxLength={80} autoFocus />
+              <span className="muted">Give this key a name so you can identify it later.</span>
+              <div className="api-modal-actions">
+                <button type="button" onClick={() => setShowGenerate(false)}>Cancel</button>
+                <button type="submit" disabled={actionLoading || !keyName.trim()}>{actionLoading ? 'Generating...' : 'Generate Key'}</button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {generatedKey && (
+        <div className="api-modal-backdrop" role="presentation">
+          <div className="api-modal" role="dialog" aria-modal="true" aria-labelledby="generated-api-key-title">
+            <span className="section-kicker">API Keys</span>
+            <h2 id="generated-api-key-title">API key generated</h2>
+            <div className="plain-language"><strong>Copy this key now.</strong><span>For security, you won't be able to view it again.</span></div>
+            <code className="api-key-plaintext">{generatedKey}</code>
+            <div className="api-modal-actions">
+              <button type="button" onClick={copyGeneratedKey}>{copyLabel}</button>
+              <button type="button" onClick={() => setGeneratedKey(null)}>Done</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {revokeTarget && (
+        <div className="api-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setRevokeTarget(null) }}>
+          <div className="api-modal" role="dialog" aria-modal="true" aria-labelledby="revoke-api-key-title">
+            <span className="section-kicker">API Keys</span>
+            <h2 id="revoke-api-key-title">Revoke API key?</h2>
+            <p className="muted">This will immediately prevent applications using this key from accessing RailETA.</p>
+            <div className="api-modal-actions">
+              <button type="button" onClick={() => setRevokeTarget(null)}>Cancel</button>
+              <button type="button" onClick={revokeKey} disabled={actionLoading}>{actionLoading ? 'Revoking...' : 'Revoke Key'}</button>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   )
 }
@@ -2927,6 +3693,16 @@ export default function RailwayApp() {
               type="stable"
             />
           }
+        />
+
+        <Route
+          path="/passenger-dashboard/developer-api"
+          element={<DeveloperApiPage />}
+        />
+
+        <Route
+          path="/authority-dashboard/developer-api"
+          element={<DeveloperApiPage authority />}
         />
       </Routes>
     </HashRouter>

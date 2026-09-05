@@ -1,26 +1,42 @@
-import os
 import sqlite3
+from datetime import datetime, timezone
 
 from pathlib import Path
 
-import httpx
-from dotenv import load_dotenv
 from fastapi import APIRouter, HTTPException
 
-
-load_dotenv()
+from backend.api.services.railradar import RailRadarError, fetch_live_train
 
 router = APIRouter(prefix="/trains", tags=["Trains"])
 
 DB_PATH = Path(__file__).resolve().parents[2] / "data" / "railway.db"
 
-RAILRADAR_API_URL = "https://api.railradar.in/v1/trains"
-
-
 def get_connection():
     connection = sqlite3.connect(DB_PATH)
     connection.row_factory = sqlite3.Row
     return connection
+
+
+def _live_summary(payload: dict) -> dict:
+    data = payload.get("data", payload) if isinstance(payload.get("data", payload), dict) else {}
+    location = data.get("currentLocation") if isinstance(data.get("currentLocation"), dict) else {}
+    train = data.get("train") if isinstance(data.get("train"), dict) else {}
+    route = data.get("route") if isinstance(data.get("route"), list) else []
+    current_code = location.get("stationCode") or location.get("station_code")
+    current_name = location.get("stationName") or location.get("station_name")
+    if current_code and not current_name:
+        match = next(
+            (stop for stop in route if isinstance(stop, dict) and (stop.get("stationCode") or stop.get("station_code")) == current_code),
+            None,
+        )
+        current_name = match.get("stationName") or match.get("station_name") if match else None
+    return {
+        "train_number": str(data.get("trainNumber") or train.get("number") or ""),
+        "status": data.get("status") or data.get("trainStatus") or location.get("status"),
+        "current_station": {"code": current_code, "name": current_name} if current_code else None,
+        "current_delay_minutes": data.get("delayMinutes") if data.get("delayMinutes") is not None else data.get("currentDelayMinutes"),
+        "updated_at": data.get("updatedAt") or data.get("lastUpdated") or datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    }
 
 
 @router.get("")
@@ -62,84 +78,11 @@ async def get_live_train(train_number: str):
     it is not present in railway.db.
     """
 
-    api_key = os.getenv("RAILRADAR_API_KEY")
-
-    if not api_key:
-        raise HTTPException(
-            status_code=500,
-            detail="RAILRADAR_API_KEY is not configured",
-        )
-
-    url = (
-        f"{RAILRADAR_API_URL}/{train_number}/live"
-        "?geometry=true&format=geojson&includeCoordinates=true"
-    )
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Accept": "application/json",
-    }
-
     try:
-        async with httpx.AsyncClient(
-            timeout=15.0,
-            verify=True,
-        ) as client:
-            response = await client.get(
-                url,
-                headers=headers,
-            )
-
-    except httpx.TimeoutException:
-        raise HTTPException(
-            status_code=504,
-            detail="RailRadar request timed out",
-        )
-
-    except httpx.RequestError as error:
-        raise HTTPException(
-            status_code=502,
-            detail=f"Could not connect to RailRadar: {error}",
-        )
-
-    if response.status_code == 401:
-        raise HTTPException(
-            status_code=502,
-            detail="RailRadar API authentication failed",
-        )
-
-    if response.status_code == 404:
-        raise HTTPException(
-            status_code=404,
-            detail=f"Live data for train {train_number} was not found on RailRadar",
-        )
-
-    if response.status_code == 429:
-        raise HTTPException(
-            status_code=429,
-            detail="RailRadar API request limit reached",
-        )
-
-    if response.status_code >= 500:
-        raise HTTPException(
-            status_code=502,
-            detail="RailRadar live service is temporarily unavailable",
-        )
-
-    if not response.is_success:
-        raise HTTPException(
-            status_code=502,
-            detail=f"RailRadar returned HTTP {response.status_code}",
-        )
-
-    try:
-        result = response.json()
-    except ValueError:
-        raise HTTPException(
-            status_code=502,
-            detail="RailRadar returned invalid JSON",
-        )
-
-    return result
+        payload = await fetch_live_train(train_number)
+        return {**payload, **_live_summary(payload)}
+    except RailRadarError as exc:
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
 
 
 @router.get("/{train_number}")

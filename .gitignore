@@ -20,9 +20,26 @@ backend/data/raw/
 # Generated validation/output
 backend/data/validation_report.json
 
+# ML artifacts and local training outputs
+backend/models/*.joblib
+backend/models/*.pkl
+backend/models/*.json
+backend/data/processed/running_events.csv
+backend/data/processed/historical_weather.csv
+backend/data/railkit_usage.json
+backend/ml/data/railkit_unavailable.csv
+
+# ML-generated raw caches, reports, feature stores, and model artifacts
+backend/ml/data/raw/
+backend/ml/data/*.json
+backend/ml/models/*.joblib
+backend/ml/models/*.json
+backend/ml/models/*.parquet
+backend/ml/models/historical_feature_store.csv
+
 # Freebuff
 .freebuff/
 
 # Frontend
 node_modules/
-dist/backend/data/raw/railkit/
+dist/
