@@ -22,7 +22,7 @@ import {
   useLocation,
 } from 'react-router-dom'
 
-import { ArrowRight, TrainFront } from 'lucide-react'
+import { ArrowRight } from 'lucide-react'
 
 setWorkerUrl(workerUrl)
 
@@ -145,7 +145,7 @@ function Header({
     <header className="dashboard-header passenger-nav">
       <Link className="brand" to={base}>
         <span className="brand-mark">
-          <TrainFront size={16} />
+          <img src="/logo.png" alt="RailETA" />
         </span>
 
         <span>RailETA</span>
@@ -1918,20 +1918,17 @@ function PassengerDashboard() {
 function Home() {
   const [query, setQuery] = useState('')
   const nav = useNavigate()
-
   return (
     <>
       <header className="home-header">
         <div className="home-brand-card">
           <Link className="brand" to="/">
             <span className="brand-mark">
-              <TrainFront size={16} />
+              <img src="/logo.png" alt="RailETA" />
             </span>
-
             <span>RailETA</span>
           </Link>
         </div>
-
         <div className="home-authority-card">
           <Link
             className="authority-link"
@@ -2025,7 +2022,7 @@ function Login() {
       <header className="home-header">
         <Link className="brand" to="/">
           <span className="brand-mark">
-            <TrainFront size={16} />
+            <img src="/logo.png" alt="RailETA" />
           </span>
 
           <span>RailETA</span>
@@ -2221,7 +2218,7 @@ function AuthoritySearch() {
         <div className="home-brand-card">
           <Link className="brand" to="/">
             <span className="brand-mark">
-              <TrainFront size={16} />
+              <img src="/logo.png" alt="RailETA" />
             </span>
 
             <span>RailETA</span>
